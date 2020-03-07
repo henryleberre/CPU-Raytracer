@@ -6,13 +6,16 @@
 #include <optional>
 #include <algorithm>
 
-#define EPSILON 0.1f
+#define EPSILON 0.01f
+#define MAX_RECURSION_DEPTH 5
 
 template <typename T>
 struct Vector2D
 {
-	T x;
-	T y;
+	union {
+		struct { T x; T y; };
+		struct { T r; T g; };
+	};
 	
 	template <typename K>
 	void operator+=(const Vector2D<K>& v) { this->x += v.x; this->y += v.y; }
@@ -85,7 +88,19 @@ template <typename T, typename K>
 template <typename T>
 struct Vector3D : Vector2D<T>
 {
-	T z;
+	union {
+		struct { T z; };
+		struct { T b; };
+	};
+
+	template <typename K>
+	operator Vector3D<K>() const noexcept {
+		return Vector3D<K>{
+			static_cast<K>(this->x),
+			static_cast<K>(this->y),
+			static_cast<K>(this->z)
+		};
+	}
 
 	template <typename K>
 	void operator+=(const Vector3D<K>& v) { this->x += v.x; this->y += v.y; this->z += v.z; }
@@ -132,6 +147,16 @@ struct Vector3D : Vector2D<T>
 	[[nodiscard]] static float Dot(const Vector3D<T>& a, const Vector3D<K>& b)
 	{
 		return a.x * b.x + a.y * b.y + a.z * b.z;
+	}
+
+	template <typename T, typename K>
+	[[nodiscard]] static Vector3D<T> Cross(const Vector3D<T>& a, const Vector3D<K>& b)
+	{
+		return Vector3D<T>{
+			static_cast<T>(a.y * b.z - a.z * b.y),
+			static_cast<T>(a.z * b.x - a.x * b.z),
+			static_cast<T>(a.x * b.y - a.y * b.x)
+		};
 	}
 };
 
@@ -186,32 +211,25 @@ typedef Vector3D<uint16_t> Vec3u16;
 typedef Vector3D<uint32_t> Vec3u32;
 typedef Vector3D<uint64_t> Vec3u64;
 
-struct Color {
-    uint8_t r;
-    uint8_t g;
-    uint8_t b;
-
-
-	operator Vec3u16 () const noexcept {
-		return Vec3u16{ r,g,b };
-	}
-};
+typedef Vec3u8  Coloru8;
+typedef Vec3u16 Coloru32;
+typedef Vec3f   Colorf;
 
 class Image {
 public:
     uint16_t width, height;
 
-    Color* m_buff;
+    Coloru8* m_buff;
 
 public:
     Image(const uint16_t width, const uint16_t height)
         : width(width), height(height)
     {
-        this->m_buff = new Color[width * height];
-        std::memset(this->m_buff, 0u, this->width * this->height * sizeof(Color));
+        this->m_buff = new Coloru8[width * height];
+        std::memset(this->m_buff, 0u, this->width * this->height * sizeof(Coloru8));
     }
 
-	void SetPixel(const uint16_t x, const uint16_t y, const Color& color)
+	void SetPixel(const uint16_t x, const uint16_t y, const Coloru8& color)
 	{
 		//std::cout << (uint16_t)color.r << '\n';
 		this->m_buff[y*width+x] = color;
@@ -223,7 +241,7 @@ public:
 		const std::string header = "P6\n" + std::to_string(this->width) + " " + std::to_string(this->height) + " 255\n";
 
 		fprintf(file, header.c_str());
-		fwrite(this->m_buff, this->width * this->height, sizeof(Color), file);
+		fwrite(this->m_buff, this->width * this->height, sizeof(Coloru8), file);
 
 		fclose(file);
     }
@@ -249,21 +267,25 @@ struct Intersect {
 
 struct Object {
 	Vec3f position;
-	Color color;
+	Coloru8 color;
+
+	bool bReflective = false;
 
 	virtual Vec3f GetNormal(const Vec3f& p) const noexcept = 0;
-	virtual bool Intersects(const Ray& ray) const noexcept = 0;
-	virtual std::vector<Intersect> GetIntersects(const Ray& ray) const noexcept = 0;
+	virtual std::optional<Intersect> GetIntersect(const Ray& ray) const noexcept = 0;
+
+	virtual ~Object() {}
 };
 
 struct Sphere : Object {
 	float radius;
 
 	Sphere() {}
-	Sphere(Vec3f position, float radius, Color color) : radius(radius)
+	Sphere(const Vec3f& position, const float radius, const Coloru8& color, const bool bReflective) : radius(radius)
 	{
 		this->color = color;
 		this->position = position;
+		this->bReflective = bReflective;
 	}
 
 	virtual Vec3f GetNormal(const Vec3f& p) const noexcept override
@@ -273,23 +295,16 @@ struct Sphere : Object {
 		return normal;
 	}
 
-	virtual bool Intersects(const Ray& ray) const noexcept override
-	{
-		Vec3f oc = ray.origin-this->position;
-		double b = 2*Vec3f::Dot(oc, ray.direction);
-		double c = Vec3f::Dot(oc,oc)-this->radius*this->radius;
-		double deltaSqrt = b*b-4*c;
-
-		return (deltaSqrt >= 0.f);
-	}
-
-	virtual std::vector<Intersect> GetIntersects(const Ray& ray) const noexcept override
+	virtual std::optional<Intersect> GetIntersect(const Ray& ray) const noexcept override
 	{
 		Vec3f L = this->position - ray.origin; 
         float tca = Vec3f::Dot(L, ray.direction); 
         float d2 = Vec3f::Dot(L, L) - tca * tca; 
-        if (d2 > this->radius) return {}; 
-        float thc = sqrt(this->radius - d2); 
+
+        if (d2 > this->radius)
+			return {};
+        
+		float thc = sqrt(this->radius - d2); 
         float t0 = tca - thc; 
         float t1 = tca + thc; 
 
@@ -302,9 +317,7 @@ struct Sphere : Object {
  
         float t = t0; 
  
-		return std::vector<Intersect>{
-			Intersect{t, ray.origin + ray.direction*t, (Object*)this}
-		};
+		return Intersect{t, ray.origin + ray.direction*t, (Object*)this};
 	}
 };
 
@@ -319,6 +332,7 @@ struct Camera {
 			1.f
 		};
 
+		nPixelWorldPosition -= this->position;
 		nPixelWorldPosition.Normalize();
 
 		return Ray { this->position, nPixelWorldPosition };
@@ -326,9 +340,9 @@ struct Camera {
 };
 
 struct Light {
-	Vec3f position;
-	Color color;
-	float intensity;
+	Vec3f   position;
+	Coloru8 color;
+	float   intensity;
 };
 
 struct Scene {
@@ -342,13 +356,73 @@ struct Scene {
 		closestIntersection.object = nullptr;
 
 		for (const Object* object : this->objects)
-			for (const Intersect& intersect : object->GetIntersects(ray))
-				if (closestIntersection.object == nullptr || intersect.d < closestIntersection.d)
-					closestIntersection = intersect;
+		{
+			const std::optional<Intersect>& intersect = object->GetIntersect(ray);
+
+			if (intersect.has_value())
+				if (closestIntersection.object == nullptr || intersect.value().d < closestIntersection.d)
+					closestIntersection = intersect.value();
+		}
 
 		if (closestIntersection.object == nullptr) return { };
 
 		return closestIntersection;
+	}
+
+	Coloru8 ComputeColor(const Ray& ray, const uint16_t currentDepth = 0u)
+	{
+		const std::optional<Intersect> closestIntersectOptional = this->GetClosestRayIntersection(ray);
+
+		if (!closestIntersectOptional.has_value())
+			return Coloru8{0u, 0u, 0u};
+
+		const Intersect& intersection = closestIntersectOptional.value();
+		const Object&    object = (*intersection.object);
+		const Vec3f      normal = object.GetNormal(intersection.point);
+
+		if (object.bReflective)
+		{
+			const Vec3f reflectionVector = {}; // TODO:: FILL
+			const Ray   reflectionRay    = { intersection.point, reflectionVector };
+
+			if (MAX_RECURSION_DEPTH != currentDepth)
+				return ComputeColor(reflectionRay, currentDepth + 1u);
+
+			return Coloru8{0u,0u,0u};
+		}
+
+		Coloru32 pixelColor{0u,0u,0u};
+
+		for (const Light& light : this->lights)
+		{
+			Vec3f pointToLight = light.position - intersection.point;
+			const float distanceToLight = pointToLight.Length();
+			pointToLight.Normalize();
+
+			const Ray pointToLightRay = {
+				intersection.point + normal * EPSILON,
+				pointToLight
+			};
+
+			const std::optional<Intersect> lightIntersectionOptional = this->GetClosestRayIntersection(pointToLightRay);
+			
+			bool isInShadow = false;
+			if (lightIntersectionOptional.has_value())
+				isInShadow = lightIntersectionOptional.value().d < distanceToLight;
+			
+			if (!isInShadow)
+			{
+				const float dotProduct = std::max(std::min(Vec3f::Dot(pointToLight, normal), 1.f), 0.f);
+								
+				pixelColor += object.color * dotProduct;
+			}
+		}
+
+		pixelColor.r = std::clamp(pixelColor.r, (uint16_t)0u, (uint16_t)255u);
+		pixelColor.g = std::clamp(pixelColor.g, (uint16_t)0u, (uint16_t)255u);
+		pixelColor.b = std::clamp(pixelColor.b, (uint16_t)0u, (uint16_t)255u);
+
+		return pixelColor;
 	}
 
 	void Draw(Image& renderSurface)
@@ -360,51 +434,7 @@ struct Scene {
 			for (pixelPosition.y = 0; pixelPosition.y < renderSurface.height; pixelPosition.y++) {
 				const Ray cameraRay = camera.GenerateRay(pixelPosition, renderSurfaceDims);
 
-				const std::optional<Intersect> cameraIntersection = this->GetClosestRayIntersection(cameraRay);
- 
-				if (cameraIntersection.has_value())
-				{
-					Vec3u16 compoundedColorVec{0u,0u,0u};
-
-					for (const Light& light : this->lights)
-					{
-						Vec3f pointToLight = light.position - cameraIntersection.value().point;
-						const float distanceToLight = pointToLight.Length();
-						pointToLight.Normalize();
-
-						const Vec3f normal = cameraIntersection.value().object->GetNormal(cameraIntersection.value().point);
-
-						const Ray pointToLightRay = {
-							cameraIntersection.value().point + normal * EPSILON,
-							pointToLight
-						};
-
-						bool bIsInShadow = false;
-
-						const std::optional<Intersect> lightIntersection = this->GetClosestRayIntersection(pointToLightRay);
-
-						if (lightIntersection.has_value())
-							if (lightIntersection.value().d < distanceToLight)
-								bIsInShadow = true;
-
-						if (!bIsInShadow)
-						{
-							float dotProduct = std::max(std::min(Vec3f::Dot(pointToLight, normal), 1.f), 0.f);
-							float intensity  = dotProduct;
-
-							compoundedColorVec.x += intensity * cameraIntersection.value().object->color.r;
-							compoundedColorVec.y += intensity * cameraIntersection.value().object->color.g;
-							compoundedColorVec.z += intensity * cameraIntersection.value().object->color.b;
-						}
-					}
-
-					Color pixelColor;
-					pixelColor.r = (compoundedColorVec.x <= 255u) ? compoundedColorVec.x : 255u;
-					pixelColor.g = (compoundedColorVec.y <= 255u) ? compoundedColorVec.y : 255u;
-					pixelColor.b = (compoundedColorVec.z <= 255u) ? compoundedColorVec.z : 255u;
-
-					renderSurface.SetPixel(pixelPosition.x, pixelPosition.y, pixelColor);
-				}
+				renderSurface.SetPixel(pixelPosition.x, pixelPosition.y, ComputeColor(cameraRay));
 			}
 		}
 	}
@@ -415,10 +445,11 @@ int main()
     Image renderSurface(1000u, 1000u);
 	Scene scene;
 
-	scene.objects.push_back(new Sphere(Vec3f{-1,0,3.5f}, 1.f, Color{255,51,51}));
-	scene.objects.push_back(new Sphere(Vec3f{+1,0,3.f}, 1.f, Color{51,51,255}));
-
-	scene.lights.push_back(Light{Vec3f{3.f, 0.f, 0.5f}, Color{255,255,255}, 0.5f});
+	scene.objects.push_back(new Sphere(Vec3f{-3,0,4.5f},  1.f, Coloru8{0,255,0},   false));
+	scene.objects.push_back(new Sphere(Vec3f{-1,0,3.75f}, 1.f, Coloru8{255,51,51}, false));
+	scene.objects.push_back(new Sphere(Vec3f{+1,0,3.f},   1.f, Coloru8{51,51,255}, false));
+	
+	scene.lights.push_back(Light{Vec3f{3.f, 0.f, 0.5f}, Coloru8{255,255,255}, 0.5f});
 
 	scene.Draw(renderSurface);
 
