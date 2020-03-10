@@ -283,6 +283,39 @@ struct Object {
 	virtual ~Object() {}
 };
 
+struct Plane : Object {
+	Plane() {}
+
+	Plane(const Vec3f& position, const Coloru8& color, const float reflectivity)
+	{
+		this->position = position;
+		this->color = color;
+		this->reflectivity = reflectivity;
+	}
+
+	~Plane() { }
+
+	virtual Vec3f GetNormal(const Vec3f& p = Vec3f{}) const noexcept override
+	{
+		return {0.f, 1.f, 0.f};
+	}
+
+	virtual std::optional<Intersect> GetIntersect(const Ray& ray) const noexcept override
+	{
+		const float denom = Vec3f::Dot(GetNormal(), ray.direction);
+		if (std::abs(denom) > 1e-6)
+		{
+			const Vec3f v = this->position - ray.origin;
+			const float t = Vec3f::Dot(v, GetNormal()) / denom;
+
+			if (t >= 0)
+				return Intersect{t, ray.origin+ray.direction*t, (Object*)this};
+		}
+
+		return {};
+	}
+};
+
 struct Sphere : Object {
 	float radius;
 
@@ -293,6 +326,8 @@ struct Sphere : Object {
 		this->position = position;
 		this->reflectivity = reflectivity;
 	}
+
+	~Sphere() {}
 
 	virtual Vec3f GetNormal(const Vec3f& p) const noexcept override
 	{
@@ -335,7 +370,7 @@ struct Camera {
 		const float aspectRatio = renderSurfaceDims.x/renderSurfaceDims.y;
 		Vec3f nPixelWorldPosition = {
 			2*(pixel.x + 1u) / (float)renderSurfaceDims.x - 1.f,
-			2*(pixel.y + 1u) / (float)renderSurfaceDims.y - 1.f,
+			2*(renderSurfaceDims.y - pixel.y + 1u) / (float)renderSurfaceDims.y - 1.f,
 			1.f
 		};
 
@@ -388,18 +423,8 @@ struct Scene {
 		const Object&    object = (*intersection.object);
 		const Vec3f      normal = object.GetNormal(intersection.point);
 
-		if (object.reflectivity > EPSILON)
-		{
-			const Ray reflectionRay = {
-				intersection.point + normal * EPSILON,
-				Vec3f::Reflect(ray.direction, normal)
-			};
-
-			if (MAX_RECURSION_DEPTH != currentDepth)
-				pixelColor += ComputeColor(reflectionRay, currentDepth + 1u) * object.reflectivity;
-		}
-
-		float totalDiffuseIntensity = 0.f;
+		float totalDiffuseIntensity  = 0.f;
+		float totalLightingIntensity = 0.f;
 		for (const Light& light : this->lights)
 		{
 			Vec3f pointToLight = light.position - intersection.point;
@@ -416,16 +441,33 @@ struct Scene {
 			bool isInShadow = false;
 			if (lightIntersectionOptional.has_value())
 				isInShadow = lightIntersectionOptional.value().d < distanceToLight;
-			
+
 			if (!isInShadow)
 			{
 				const float dotProduct = std::clamp(Vec3f::Dot(pointToLight, normal), 0.f, 1.f);
-								
-				totalDiffuseIntensity += light.intensity * dotProduct * (1.f - object.reflectivity);
+				
+				const float lightingIntensity = light.intensity * dotProduct;
+
+				totalLightingIntensity += lightingIntensity;
+				totalDiffuseIntensity  += lightingIntensity * (1.f - object.reflectivity);
 			}
 		}
 
-		pixelColor += object.color * std::clamp(totalDiffuseIntensity, 0.f, 1.f);
+		totalDiffuseIntensity  = std::clamp(totalDiffuseIntensity,  0.f, 1.f);
+		totalLightingIntensity = std::clamp(totalLightingIntensity, 0.f, 1.f);
+
+		pixelColor += object.color * totalDiffuseIntensity;
+
+		if (object.reflectivity > EPSILON)
+		{
+			const Ray reflectionRay = {
+				intersection.point + normal * EPSILON,
+				Vec3f::Reflect(ray.direction, normal)
+			};
+
+			if (MAX_RECURSION_DEPTH != currentDepth)
+				pixelColor += ComputeColor(reflectionRay, currentDepth + 1u) * totalLightingIntensity * object.reflectivity;
+		}
 
 		pixelColor.r = std::clamp(pixelColor.r, (uint16_t)0u, (uint16_t)255u);
 		pixelColor.g = std::clamp(pixelColor.g, (uint16_t)0u, (uint16_t)255u);
@@ -451,17 +493,23 @@ struct Scene {
 
 int main()
 {
-    Image renderSurface(5000, 5000);
+    Image renderSurface(1000, 1000);
 	Scene scene;
 
-	scene.objects.push_back(new Sphere(Vec3f{-3,0,3.f}, 1.f, Coloru8{0,255,0},   0.f));
-	scene.objects.push_back(new Sphere(Vec3f{-1,0,5.f}, 1.f, Coloru8{255,51,51}, 0.5f));
-	scene.objects.push_back(new Sphere(Vec3f{+1,0,3.f}, 1.f, Coloru8{51,51,255}, 0.f));
+	scene.objects.push_back(new Sphere(Vec3f{-3.0f,  1.0f, 3.0f}, 1.0f, Coloru8{0,   255, 0  }, 0.f));
+	scene.objects.push_back(new Sphere(Vec3f{-1.0f,  0.4f, 5.0f}, 1.0f, Coloru8{255, 255, 255}, 1.0f));
+	scene.objects.push_back(new Sphere(Vec3f{+1,     0.4f, 3.0f}, 1.0f, Coloru8{51,  51,  255}, 0.0f));
+	scene.objects.push_back(new Sphere(Vec3f{0.75f, -1.0f, 2.5f}, 1.0f, Coloru8{0,   255, 255}, 0.0f));
+	scene.objects.push_back(new Sphere(Vec3f{-2.0f,  2.0f, 6.0f}, 1.0f, Coloru8{255, 0,   0  }, 0.0f));
 
-	scene.lights.push_back(Light{Vec3f{-3.f, 0.f, 0.f},  Coloru8{255,255,255}, 0.5f});
-	scene.lights.push_back(Light{Vec3f{+3.f, 0.f, 0.f},  Coloru8{255,255,255}, 0.5f});
-	scene.lights.push_back(Light{Vec3f{-3.f, 0.f, 10.f}, Coloru8{255,255,255}, 0.5f});
-	scene.lights.push_back(Light{Vec3f{+3.f, 0.f, 10.f}, Coloru8{255,255,255}, 0.5f});
+	scene.objects.push_back(new Plane(Vec3f{-1.f, -2.f, 0.f}, Coloru8{255, 255, 255}, 0.f));
+
+	//scene.lights.push_back(Light{Vec3f{-3.f, 0.f, 0.f},  Coloru8{255,255,255}, 0.5f});
+	//scene.lights.push_back(Light{Vec3f{+3.f, 0.f, 0.f},  Coloru8{255,255,255}, 0.5f});
+	//scene.lights.push_back(Light{Vec3f{-3.f, 0.f, 10.f}, Coloru8{255,255,255}, 0.5f});
+	//scene.lights.push_back(Light{Vec3f{+3.f, 0.f, 10.f}, Coloru8{255,255,255}, 0.5f});
+	//scene.lights.push_back(Light{Vec3f{+3.f, 4.f, -1.f},  Coloru8{255,255,255}, 1.f});
+	scene.lights.push_back(Light{Vec3f{-1.f, 1.5f, -2.f}, Coloru8{255,255,255}, 1.f});
 
 	scene.Draw(renderSurface);
 
