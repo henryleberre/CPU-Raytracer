@@ -1,3 +1,4 @@
+#include <thread>
 #include <string>
 #include <vector>
 #include <memory>
@@ -132,15 +133,15 @@ struct Vector3D : Vector2D<T>
 	template<typename K>
 	bool operator!=(const Vector3D<K>& v) { return this->x != v.x || this->y != v.y || this->z != v.z; }
 
-	float Length()
+	float Length() const noexcept
 	{
 		return std::sqrt( x*x+y*y+z*z );
 	}
 
-	void Normalize()
+	template <typename T>
+	[[nodiscard]] static Vector3D<T> Normalize(const Vector3D<T> v)
 	{
-		float l = Length();
-		operator/=(l);
+		return v / v.Length();
 	}
 
 	template <typename T, typename K>
@@ -276,6 +277,8 @@ struct Object {
 	Coloru8 color;
 
 	float reflectivity = 0.f;
+	float shininess    = 0.5f;
+	float shineDamper  = 2.f;
 
 	virtual Vec3f GetNormal(const Vec3f& p) const noexcept = 0;
 	virtual std::optional<Intersect> GetIntersect(const Ray& ray) const noexcept = 0;
@@ -284,9 +287,12 @@ struct Object {
 };
 
 struct Plane : Object {
+	Vec3f normal;
+	
 	Plane() {}
 
-	Plane(const Vec3f& position, const Coloru8& color, const float reflectivity)
+	Plane(const Vec3f& position, const Coloru8& color, const Vec3f& normal, const float reflectivity)
+		: normal(normal)
 	{
 		this->position = position;
 		this->color = color;
@@ -297,13 +303,13 @@ struct Plane : Object {
 
 	virtual Vec3f GetNormal(const Vec3f& p = Vec3f{}) const noexcept override
 	{
-		return {0.f, 1.f, 0.f};
+		return this->normal;
 	}
 
 	virtual std::optional<Intersect> GetIntersect(const Ray& ray) const noexcept override
 	{
 		const float denom = Vec3f::Dot(GetNormal(), ray.direction);
-		if (std::abs(denom) > 1e-6)
+		if (std::abs(denom) >= 1e-6)
 		{
 			const Vec3f v = this->position - ray.origin;
 			const float t = Vec3f::Dot(v, GetNormal()) / denom;
@@ -331,9 +337,7 @@ struct Sphere : Object {
 
 	virtual Vec3f GetNormal(const Vec3f& p) const noexcept override
 	{
-		Vec3f normal = (p-this->position)/ (float) this->radius;
-		normal.Normalize();
-		return normal;
+		return Vec3f::Normalize((p-this->position) / (float) this->radius);
 	}
 
 	virtual std::optional<Intersect> GetIntersect(const Ray& ray) const noexcept override
@@ -375,7 +379,7 @@ struct Camera {
 		};
 
 		nPixelWorldPosition -= this->position;
-		nPixelWorldPosition.Normalize();
+		nPixelWorldPosition = Vec3f::Normalize(nPixelWorldPosition);
 
 		return Ray { this->position, nPixelWorldPosition };
 	}
@@ -422,6 +426,7 @@ struct Scene {
 		const Intersect& intersection = closestIntersectOptional.value();
 		const Object&    object = (*intersection.object);
 		const Vec3f      normal = object.GetNormal(intersection.point);
+		const Vec3f      pointToCamera = Vec3f::Normalize(camera.position - intersection.point);
 
 		float totalDiffuseIntensity  = 0.f;
 		float totalLightingIntensity = 0.f;
@@ -429,7 +434,7 @@ struct Scene {
 		{
 			Vec3f pointToLight = light.position - intersection.point;
 			const float distanceToLight = pointToLight.Length();
-			pointToLight.Normalize();
+			pointToLight = Vec3f::Normalize(pointToLight);
 
 			const Ray pointToLightRay = {
 				intersection.point + normal * EPSILON,
@@ -444,12 +449,18 @@ struct Scene {
 
 			if (!isInShadow)
 			{
-				const float dotProduct = std::clamp(Vec3f::Dot(pointToLight, normal), 0.f, 1.f);
-				
-				const float lightingIntensity = light.intensity * dotProduct;
+				// Diffuse
+				const float diffuseDotProduct = std::clamp(Vec3f::Dot(pointToLight, normal), 0.f, 1.f);
+				const float diffuseIntensity  = light.intensity * diffuseDotProduct;
 
-				totalLightingIntensity += lightingIntensity;
-				totalDiffuseIntensity  += lightingIntensity * (1.f - object.reflectivity);
+				// Specular
+				const Vec3f lightReflectionVector = Vec3f::Reflect(pointToCamera, normal);
+				const float specularDotProduct    = std::clamp(Vec3f::Dot(pointToCamera, lightReflectionVector), 0.f, 1.f);
+				const float specularIntensity     = object.shininess * std::pow(specularDotProduct, object.shineDamper);
+
+				// Total
+				totalLightingIntensity += diffuseIntensity + specularIntensity;
+				totalDiffuseIntensity  += (diffuseIntensity + specularIntensity) * (1.f - object.reflectivity); // TODO:: CHANGE TO LIGHT COLOR
 			}
 		}
 
@@ -460,9 +471,11 @@ struct Scene {
 
 		if (object.reflectivity > EPSILON)
 		{
+			const Vec3f cameraReflectionVector = Vec3f::Reflect(ray.direction, normal);
+
 			const Ray reflectionRay = {
 				intersection.point + normal * EPSILON,
-				Vec3f::Reflect(ray.direction, normal)
+				cameraReflectionVector
 			};
 
 			if (MAX_RECURSION_DEPTH != currentDepth)
@@ -493,23 +506,19 @@ struct Scene {
 
 int main()
 {
-    Image renderSurface(1000, 1000);
+    Image renderSurface(10000, 10000);
 	Scene scene;
 
-	scene.objects.push_back(new Sphere(Vec3f{-3.0f,  1.0f, 3.0f}, 1.0f, Coloru8{0,   255, 0  }, 0.f));
-	scene.objects.push_back(new Sphere(Vec3f{-1.0f,  0.4f, 5.0f}, 1.0f, Coloru8{255, 255, 255}, 1.0f));
-	scene.objects.push_back(new Sphere(Vec3f{+1,     0.4f, 3.0f}, 1.0f, Coloru8{51,  51,  255}, 0.0f));
-	scene.objects.push_back(new Sphere(Vec3f{0.75f, -1.0f, 2.5f}, 1.0f, Coloru8{0,   255, 255}, 0.0f));
-	scene.objects.push_back(new Sphere(Vec3f{-2.0f,  2.0f, 6.0f}, 1.0f, Coloru8{255, 0,   0  }, 0.0f));
+	scene.objects.push_back(new Sphere(Vec3f{0.0f, 0.f, 5.0f}, 1.0f, Coloru8{255, 255, 255}, 1.0f));
 
-	scene.objects.push_back(new Plane(Vec3f{-1.f, -2.f, 0.f}, Coloru8{255, 255, 255}, 0.f));
-
-	//scene.lights.push_back(Light{Vec3f{-3.f, 0.f, 0.f},  Coloru8{255,255,255}, 0.5f});
-	//scene.lights.push_back(Light{Vec3f{+3.f, 0.f, 0.f},  Coloru8{255,255,255}, 0.5f});
-	//scene.lights.push_back(Light{Vec3f{-3.f, 0.f, 10.f}, Coloru8{255,255,255}, 0.5f});
-	//scene.lights.push_back(Light{Vec3f{+3.f, 0.f, 10.f}, Coloru8{255,255,255}, 0.5f});
-	//scene.lights.push_back(Light{Vec3f{+3.f, 4.f, -1.f},  Coloru8{255,255,255}, 1.f});
-	scene.lights.push_back(Light{Vec3f{-1.f, 1.5f, -2.f}, Coloru8{255,255,255}, 1.f});
+	scene.objects.push_back(new Plane(Vec3f{0.f, -5.f, 0.f},  Coloru8{255, 255, 0u}, Vec3f{0.f,  1.f, 0.f }, 0.f));
+	scene.objects.push_back(new Plane(Vec3f{0.f,  0.f, 10.f}, Coloru8{255, 0u, 255}, Vec3f{0.f,  0.f, -1.f}, 0.f));
+	scene.objects.push_back(new Plane(Vec3f{-5.f, 0.f, 0.f},  Coloru8{255, 0u, 0u},  Vec3f{1.f,  0.f, 0.f }, 0.f));
+	scene.objects.push_back(new Plane(Vec3f{5.f,  0.f, 0.f},  Coloru8{0u, 0u, 255},  Vec3f{-1.f, 0.f, 0.f }, 0.f));
+	scene.objects.push_back(new Plane(Vec3f{0.f,  5.f, 0.f},  Coloru8{0u, 255, 255}, Vec3f{0.f, -1.f, 0.f }, 0.f));
+	scene.objects.push_back(new Plane(Vec3f{0.f, 1.f, 12.f}, Coloru8{255, 255, 255}, Vec3f{0.f,  0.5f, -0.5f}, 0.f));
+	scene.lights.push_back(Light{Vec3f{0.f, 4.f, 4.f}, Coloru8{255,255,255}, 0.5f});
+	scene.lights.push_back(Light{Vec3f{0.f, 0.f, 0.f}, Coloru8{255,255,255}, 0.5f});
 
 	scene.Draw(renderSurface);
 
