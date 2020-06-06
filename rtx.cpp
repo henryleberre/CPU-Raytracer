@@ -1,5 +1,3 @@
-#define __WEISS__DISABLE_SIMD
-
 #include <thread>
 #include <string>
 #include <vector>
