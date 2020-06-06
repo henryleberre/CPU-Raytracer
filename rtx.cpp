@@ -1,3 +1,5 @@
+#define __WEISS__DISABLE_SIMD
+
 #include <thread>
 #include <string>
 #include <vector>
@@ -7,239 +9,30 @@
 #include <optional>
 #include <algorithm>
 
+#include "Weiss-Math/WSMath.h"
+
+using namespace WSMath;
+
 #define EPSILON 0.01f
 #define THREAD_MAX 5
 #define MAX_RECURSION_DEPTH 10
-
-template <typename T>
-struct Vector2D
-{
-	union {
-		struct { T x; T y; };
-		struct { T r; T g; };
-	};
-	
-	template <typename K>
-	void operator+=(const Vector2D<K>& v) { this->x += v.x; this->y += v.y; }
-
-	template <typename K>
-	void operator-=(const Vector2D<K>& v) { this->x -= v.x; this->y -= v.y; }
-
-	template <typename K>
-	void operator*=(const Vector2D<K>& v) { this->x *= v.x; this->y *= v.y; }
-
-	template <typename K>
-	void operator/=(const Vector2D<K>& v) { this->x /= v.x; this->y /= v.y; }
-
-	template <typename K>
-	void operator+=(const K& n) { this->x += n; this->y += n; }
-
-	template <typename K>
-	void operator-=(const K& n) { this->x -= n; this->y -= n; }
-
-	template <typename K>
-	void operator*=(const K& n) { this->x *= n; this->y *= n; }
-
-	template <typename K>
-	void operator/=(const K& n) { this->x /= n; this->y /= n; }
-
-	template<typename K>
-	bool operator==(const Vector2D<K>& v) { return this->x == v.x && this->y == v.y; }
-
-	template<typename K>
-	bool operator!=(const Vector2D<K>& v) { return this->x != v.x || this->y != v.y; }
-
-	template <typename T, typename K>
-	[[nodiscard]] static float Dot(const Vector2D<T>& a, const Vector2D<K>& b)
-	{
-		return a.x * b.x + a.y * b.y;
-	}
-};
-
-template <typename T>
-std::ostream& operator<<(std::ostream& os, const Vector2D<T>& v)
-{
-	os << '(' << v.x << ", " << v.y << ")";
-	return os;
-}
-
-template <typename T, typename K>
-[[nodiscard]] Vector2D<T> operator+(const Vector2D<T>& a, const Vector2D<K>& b) { return Vector2D<T>{ a.x + b.x, a.y + b.y }; }
-
-template <typename T, typename K>
-[[nodiscard]] Vector2D<T> operator-(const Vector2D<T>& a, const Vector2D<K>& b) { return Vector2D<T>{ a.x - b.x, a.y - b.y }; }
-
-template <typename T, typename K>
-[[nodiscard]] Vector2D<T> operator*(const Vector2D<T>& a, const Vector2D<K>& b) { return Vector2D<T>{ a.x * b.x, a.y * b.y }; }
-
-template <typename T, typename K>
-[[nodiscard]] Vector2D<T> operator/(const Vector2D<T>& a, const Vector2D<K>& b) { return Vector2D<T>{ a.x / b.x, a.y / b.y }; }
-
-template <typename T, typename K>
-[[nodiscard]] Vector2D<T> operator+(const Vector2D<T>& v, const K& n) { return Vector2D<T>{ v.x + n, v.y + n }; }
-
-template <typename T, typename K>
-[[nodiscard]] Vector2D<T> operator-(const Vector2D<T>& v, const K& n) { return Vector2D<T>{ v.x - n, v.y - n }; }
-
-template <typename T, typename K>
-[[nodiscard]] Vector2D<T> operator*(const Vector2D<T>& v, const K& n) { return Vector2D<T>{ v.x * n, v.y * n }; }
-
-template <typename T, typename K>
-[[nodiscard]] Vector2D<T> operator/(const Vector2D<T>& v, const K& n) { return Vector2D<T>{ v.x / n, v.y / n }; }
-
-template <typename T>
-struct Vector3D : Vector2D<T>
-{
-	union {
-		struct { T z; };
-		struct { T b; };
-	};
-
-	template <typename K>
-	operator Vector3D<K>() const noexcept {
-		return Vector3D<K>{
-			static_cast<K>(this->x),
-			static_cast<K>(this->y),
-			static_cast<K>(this->z)
-		};
-	}
-
-	template <typename K>
-	void operator+=(const Vector3D<K>& v) { this->x += v.x; this->y += v.y; this->z += v.z; }
-
-	template <typename K>
-	void operator-=(const Vector3D<K>& v) { this->x -= v.x; this->y -= v.y; this->z -= v.z; }
-
-	template <typename K>
-	void operator*=(const Vector3D<K>& v) { this->x *= v.x; this->y *= v.y; this->z *= v.z; }
-
-	template <typename K>
-	void operator/=(const Vector3D<K>& v) { this->x /= v.x; this->y /= v.y; this->z /= v.z; }
-
-	template <typename K>
-	void operator+=(const K& n) { this->x += n; this->y += n; this->z += n; }
-
-	template <typename K>
-	void operator-=(const K& n) { this->x -= n; this->y -= n; this->z -= n; }
-
-	template <typename K>
-	void operator*=(const K& n) { this->x *= n; this->y *= n; this->z *= n; }
-
-	template <typename K>
-	void operator/=(const K& n) { this->x /= n; this->y /= n; this->z /= n; }
-
-	template<typename K>
-	bool operator==(const Vector3D<K>& v) { return this->x == v.x && this->y == v.y && this->z == v.z; }
-
-	template<typename K>
-	bool operator!=(const Vector3D<K>& v) { return this->x != v.x || this->y != v.y || this->z != v.z; }
-
-	float Length() const noexcept
-	{
-		return std::sqrt( x*x+y*y+z*z );
-	}
-
-	template <typename T>
-	[[nodiscard]] static Vector3D<T> Normalize(const Vector3D<T> v)
-	{
-		return v / v.Length();
-	}
-
-	template <typename T, typename K>
-	[[nodiscard]] static float Dot(const Vector3D<T>& a, const Vector3D<K>& b)
-	{
-		return a.x * b.x + a.y * b.y + a.z * b.z;
-	}
-
-	template <typename T, typename K>
-	[[nodiscard]] static Vector3D<T> Cross(const Vector3D<T>& a, const Vector3D<K>& b)
-	{
-		return Vector3D<T>{
-			static_cast<T>(a.y * b.z - a.z * b.y),
-			static_cast<T>(a.z * b.x - a.x * b.z),
-			static_cast<T>(a.x * b.y - a.y * b.x)
-		};
-	}
-
-	template <typename T, typename K>
-	[[nodiscard]] static Vector3D<T> Reflect(const Vector3D<T>& in, const Vector3D<K>& normal)
-	{
-		return in - normal * 2 * Vec3f::Dot(in, normal);
-	}
-};
-
-template <typename T, typename K>
-[[nodiscard]] Vector3D<T> operator+(const Vector3D<T>& a, const Vector3D<K>& b) { return Vector3D<T>{ static_cast<T>(a.x + b.x), static_cast<T>(a.y + b.y), static_cast<T>(a.z + b.z) }; }
-
-template <typename T, typename K>
-[[nodiscard]] Vector3D<T> operator-(const Vector3D<T>& a, const Vector3D<K>& b) { return Vector3D<T>{ static_cast<T>(a.x - b.x), static_cast<T>(a.y - b.y), static_cast<T>(a.z - b.z) }; }
-
-template <typename T, typename K>
-[[nodiscard]] Vector3D<T> operator*(const Vector3D<T>& a, const Vector3D<K>& b) { return Vector3D<T>{ static_cast<T>(a.x * b.x), static_cast<T>(a.y * b.y), static_cast<T>(a.z * b.z) }; }
-
-template <typename T, typename K>
-[[nodiscard]] Vector3D<T> operator/(const Vector3D<T>& a, const Vector3D<K>& b) { return Vector3D<T>{ static_cast<T>(a.x / b.x), static_cast<T>(a.y / b.y), static_cast<T>(a.z / b.z) }; }
-
-template <typename T, typename K>
-[[nodiscard]] Vector3D<T> operator+(const Vector3D<T>& v, const K& n) { return Vector3D<T>{ static_cast<T>(v.x + n), static_cast<T>(v.y + n), static_cast<T>(v.z + n) }; }
-
-template <typename T, typename K>
-[[nodiscard]] Vector3D<T> operator-(const Vector3D<T>& v, const K& n) { return Vector3D<T>{ static_cast<T>(v.x - n), static_cast<T>(v.y - n), static_cast<T>(v.z - n) }; }
-
-template <typename T, typename K>
-[[nodiscard]] Vector3D<T> operator*(const Vector3D<T>& v, const K& n) { return Vector3D<T>{ static_cast<T>(v.x * n), static_cast<T>(v.y * n), static_cast<T>(v.z * n) }; }
-
-template <typename T, typename K>
-[[nodiscard]] Vector3D<T> operator/(const Vector3D<T>& v, const K& n) { return Vector3D<T>{ static_cast<T>(v.x / n), static_cast<T>(v.y / n), static_cast<T>(v.z / n) }; }
-
-template <typename T>
-std::ostream& operator<<(std::ostream& os, const Vector3D<T>& v)
-{
-	os << '(' << v.x << ", " << v.y << ", " << v.z << ")";
-	return os;
-}
-
-typedef Vector2D<float>    Vec2f;
-typedef Vector2D<int8_t>   Vec2i8;
-typedef Vector2D<int16_t>  Vec2i16;
-typedef Vector2D<int32_t>  Vec2i32;
-typedef Vector2D<int64_t>  Vec2i64;
-typedef Vector2D<uint8_t>  Vec2u8;
-typedef Vector2D<uint16_t> Vec2u16;
-typedef Vector2D<uint32_t> Vec2u32;
-typedef Vector2D<uint64_t> Vec2u64;
-
-typedef Vector3D<float>    Vec3f;
-typedef Vector3D<int8_t>   Vec3i8;
-typedef Vector3D<int16_t>  Vec3i16;
-typedef Vector3D<int32_t>  Vec3i32;
-typedef Vector3D<int64_t>  Vec3i64;
-typedef Vector3D<uint8_t>  Vec3u8;
-typedef Vector3D<uint16_t> Vec3u16;
-typedef Vector3D<uint32_t> Vec3u32;
-typedef Vector3D<uint64_t> Vec3u64;
-
-typedef Vec3u8  Coloru8;
-typedef Vec3u16 Coloru32;
-typedef Vec3f   Colorf;
 
 class Image {
 public:
     uint16_t width, height;
 
-    Coloru8* m_buff;
+    RawVectorComponents<uint8_t, 3u>* m_buff;
 
 public:
     Image(const uint16_t width, const uint16_t height)
         : width(width), height(height)
     {
-        this->m_buff = new Coloru8[width * height];
-        std::memset(this->m_buff, 0u, this->width * this->height * sizeof(Coloru8));
+        this->m_buff = new RawVectorComponents<uint8_t, 3u>[width * height];
+        std::memset(this->m_buff, 0u, this->width * this->height * sizeof(RawVectorComponents<uint8_t, 3u>));
     }
 
 	void SetPixel(const uint16_t x, const uint16_t y, const Coloru8& color)
 	{
-		//std::cout << (uint16_t)color.r << '\n';
 		this->m_buff[y*width+x] = color;
 	}
 
@@ -249,7 +42,7 @@ public:
 		const std::string header = "P6\n" + std::to_string(this->width) + " " + std::to_string(this->height) + " 255\n";
 
 		fprintf(file, header.c_str());
-		fwrite(this->m_buff, this->width * this->height, sizeof(Coloru8), file);
+		fwrite(this->m_buff, this->width * this->height, sizeof(RawVectorComponents<uint8_t, 3u>), file);
 
 		fclose(file);
     }
@@ -261,36 +54,36 @@ public:
 };
 
 struct Ray {
-	Vec3f origin;
-	Vec3f direction;
+	Vecf32 origin;
+	Vecf32 direction;
 };
 
 struct Object;
 
 struct Intersect {
 	double d;
-	Vec3f point;
+	Vecf32 point;
 	Object* object;
 };
 
 struct Object {
-	Vec3f position;
-	Colorf color;
+	Vecf32 position;
+	Colorf32 color;
 
 	float reflectivity = 0.f;
 
-	virtual Vec3f GetNormal(const Vec3f& p) const noexcept = 0;
+	virtual Vecf32 GetNormal(const Vecf32& p) const noexcept = 0;
 	virtual std::optional<Intersect> GetIntersect(const Ray& ray) const noexcept = 0;
 
 	virtual ~Object() {}
 };
 
 struct Plane : Object {
-	Vec3f normal;
+	Vecf32 normal;
 	
 	Plane() {}
 
-	Plane(const Vec3f& position, const Colorf& color, const Vec3f& normal, const float reflectivity)
+	Plane(const Vecf32& position, const Colorf32& color, const Vecf32& normal, const float reflectivity)
 		: normal(normal)
 	{
 		this->position = position;
@@ -300,18 +93,18 @@ struct Plane : Object {
 
 	~Plane() { }
 
-	virtual Vec3f GetNormal(const Vec3f& p = Vec3f{}) const noexcept override
+	virtual Vecf32 GetNormal(const Vecf32& p = Vecf32{}) const noexcept override
 	{
 		return this->normal;
 	}
 
 	virtual std::optional<Intersect> GetIntersect(const Ray& ray) const noexcept override
 	{
-		const float denom = Vec3f::Dot(GetNormal(), ray.direction);
+		const float denom = Vector<>::DotProduct(GetNormal(), ray.direction);
 		if (std::abs(denom) >= 1e-6)
 		{
-			const Vec3f v = this->position - ray.origin;
-			const float t = Vec3f::Dot(v, GetNormal()) / denom;
+			const Vecf32 v = this->position - ray.origin;
+			const float t = Vector<>::DotProduct(v, GetNormal()) / denom;
 
 			if (t >= 0)
 				return Intersect{t, ray.origin+ray.direction*t, (Object*)this};
@@ -325,7 +118,7 @@ struct Sphere : Object {
 	float radius;
 
 	Sphere() {}
-	Sphere(const Vec3f& position, const float radius, const Colorf& color, const float reflectivity) : radius(radius)
+	Sphere(const Vecf32& position, const float radius, const Colorf32& color, const float reflectivity) : radius(radius)
 	{
 		this->color = color;
 		this->position = position;
@@ -334,16 +127,17 @@ struct Sphere : Object {
 
 	~Sphere() {}
 
-	virtual Vec3f GetNormal(const Vec3f& p) const noexcept override
+	virtual Vecf32 GetNormal(const Vecf32& p) const noexcept override
 	{
-		return Vec3f::Normalize((p-this->position) / (float) this->radius);
+		return Vector<>::Normalized((p-this->position) / (float) this->radius);
 	}
 
 	virtual std::optional<Intersect> GetIntersect(const Ray& ray) const noexcept override
 	{
-		Vec3f L = this->position - ray.origin; 
-        float tca = Vec3f::Dot(L, ray.direction); 
-        float d2 = Vec3f::Dot(L, L) - tca * tca; 
+		Vecf32 L = this->position - ray.origin; 
+
+        float tca = Vector<>::DotProduct(L, ray.direction); 
+        float d2 = Vector<>::DotProduct(L, L) - tca * tca; 
 
         if (d2 > this->radius)
 			return {};
@@ -366,28 +160,28 @@ struct Sphere : Object {
 };
 
 struct Camera {
-	Vec3f position {0.f, 0.f, 0.1f};
+	Vecf32 position {0.f, 0.f, 0.1f};
 
-	Ray GenerateRay(const Vec2u16& pixel, const Vec2u16& renderSurfaceDims)
+	Ray GenerateRay(const Vecu16& pixel, const Vecu16& renderSurfaceDims)
 	{
 		const float aspectRatio = renderSurfaceDims.x/renderSurfaceDims.y;
-		Vec3f nPixelWorldPosition = {
+		Vecf32 nPixelWorldPosition = {
 			2*(pixel.x + 1u) / (float)renderSurfaceDims.x - 1.f,
 			2*(renderSurfaceDims.y - pixel.y + 1u) / (float)renderSurfaceDims.y - 1.f,
 			1.f
 		};
 
 		nPixelWorldPosition -= this->position;
-		nPixelWorldPosition = Vec3f::Normalize(nPixelWorldPosition);
+		nPixelWorldPosition = Vector<>::Normalized(nPixelWorldPosition);
 
 		return Ray { this->position, nPixelWorldPosition };
 	}
 };
 
 struct Light {
-	Vec3f   position;
-	Colorf  color;
-	float   intensity;
+	Vecf32   position;
+	Colorf32 color;
+	float    intensity;
 };
 
 struct Scene {
@@ -414,9 +208,9 @@ struct Scene {
 		return closestIntersection;
 	}
 
-	Colorf ComputeColor(const Ray& ray, const uint16_t currentDepth = 0u)
+	Colorf32 ComputeColor(const Ray& ray, const uint16_t currentDepth = 0u)
 	{
-		Colorf pixelColorf{0.05f,0.05f,0.05f};
+		Colorf32 pixelColorf{0.05f,0.05f,0.05f};
 		const std::optional<Intersect> closestIntersectOptional = this->GetClosestRayIntersection(ray);
 
 		if (!closestIntersectOptional.has_value())
@@ -424,19 +218,19 @@ struct Scene {
 
 		const Intersect& intersection = closestIntersectOptional.value();
 		const Object&    object = (*intersection.object);
-		const Vec3f      normal = object.GetNormal(intersection.point);
-		const Vec3f      pointToCamera = Vec3f::Normalize(camera.position - intersection.point);
+		const Vecf32     normal = object.GetNormal(intersection.point);
+		const Vecf32     pointToCamera = Vector<>::Normalized(camera.position - intersection.point);
 
-		Colorf totalDiffuseColorf  = {0.f, 0.f, 0.f};
-		Colorf totalSpecularColorf = {0.f, 0.f, 0.f};
+		Colorf32 totalDiffuseColorf  = {0.f, 0.f, 0.f};
+		Colorf32 totalSpecularColorf = {0.f, 0.f, 0.f};
 
 		float totalLightingIntensity = 0.f;
 
 		for (const Light& light : this->lights)
 		{
-			Vec3f pointToLight = light.position - intersection.point;
-			const float distanceToLight = pointToLight.Length();
-			pointToLight = Vec3f::Normalize(pointToLight);
+			Vecf32 pointToLight = light.position - intersection.point;
+			const float distanceToLight = pointToLight.GetLength();
+			pointToLight = Vector<>::Normalized(pointToLight);
 
 			const Ray pointToLightRay = {
 				intersection.point + normal * EPSILON,
@@ -452,7 +246,7 @@ struct Scene {
 			if (!isInShadow)
 			{
 				// Diffuse
-				const float diffuseDotProduct = std::clamp(Vec3f::Dot(pointToLight, normal), 0.f, 1.f);
+				const float diffuseDotProduct = std::clamp(Vector<>::DotProduct(pointToLight, normal), 0.f, 1.f);
 				const float diffuseIntensity  = light.intensity * diffuseDotProduct;
 
 				totalDiffuseColorf += light.color * diffuseIntensity * (1.f - object.reflectivity); // TODO:: CHANGE TO LIGHT COLOR
@@ -461,8 +255,8 @@ struct Scene {
 				float specularIntensity = 0.f;
 				if (object.reflectivity > EPSILON)
 				{
-					const Vec3f reflectedLight     = Vec3f::Reflect(ray.direction, normal);
-					const float specularDotProduct = std::max(Vec3f::Dot(pointToCamera, reflectedLight), 0.f);
+					const Vecf32 reflectedLight     = Vector<>::GetReflected(ray.direction, normal);
+					const float  specularDotProduct = std::max(Vector<>::DotProduct(pointToCamera, reflectedLight), 0.f);
 					specularIntensity = std::pow(specularDotProduct, 2.f);
 
 					totalSpecularColorf += light.color * specularIntensity * object.reflectivity;
@@ -479,7 +273,7 @@ struct Scene {
 
 		if (object.reflectivity > EPSILON)
 		{
-			const Vec3f cameraReflectionVector = Vec3f::Reflect(ray.direction, normal);
+			const Vecf32 cameraReflectionVector = Vector<>::GetReflected(ray.direction, normal);
 
 			const Ray reflectionRay = {
 				intersection.point + normal * EPSILON,
@@ -499,16 +293,14 @@ struct Scene {
 
 	void Draw(Image& renderSurface)
 	{
-		const Vec2u16 renderSurfaceDims = { renderSurface.width, renderSurface.height };
+		const Vecu16 renderSurfaceDims = { renderSurface.width, renderSurface.height };
 
-		std::vector<std::thread> workerThreads(THREAD_MAX);
-
-		Vec2u16 pixelPosition;
+		Vecu16 pixelPosition;
 		for (pixelPosition.x = 0; pixelPosition.x < renderSurface.width; pixelPosition.x++) {
 			for (pixelPosition.y = 0; pixelPosition.y < renderSurface.height; pixelPosition.y++) {
 				const Ray cameraRay = camera.GenerateRay(pixelPosition, renderSurfaceDims);
 
-				renderSurface.SetPixel(pixelPosition.x, pixelPosition.y, ComputeColor(cameraRay) * 255u);
+				renderSurface.SetPixel(pixelPosition.x, pixelPosition.y, Coloru8(ComputeColor(cameraRay) * 255u));
 			}
 		}
 	}
@@ -526,12 +318,12 @@ int main()
 	Scene scene;
 
 	// Ground
-	scene.objects.push_back(new Plane(Vec3f{0.f, -1.5f, 0.f}, Colorf{1.f, 1.f, 1.f}, Vec3f{0.f, 1.f, 0.f}, 0.0f));
-	scene.objects.push_back(new Sphere(Vec3f{-2.f, 0.f, 5.f}, 1.f, Colorf{1.f, 0.f, 0.f}, 1.f));
-	scene.objects.push_back(new Sphere(Vec3f{2.f, 0.f, 5.f},  1.f, Colorf{1.f, 0.f, 0.f}, 1.f));
+	scene.objects.push_back(new Plane(Vecf32{0.f, -1.5f, 0.f}, Colorf32{1.f, 1.f, 1.f}, Vecf32{0.f, 1.f, 0.f}, 0.0f));
+	scene.objects.push_back(new Sphere(Vecf32{-2.f, 0.f, 5.f}, 1.f, Colorf32{1.f, 0.f, 0.f}, 1.f));
+	scene.objects.push_back(new Sphere(Vecf32{2.f, 0.f, 5.f},  1.f, Colorf32{1.f, 0.f, 0.f}, 1.f));
 
-	//scene.lights.push_back(Light{Vec3f{0.f, 4.f, 0.f}, Colorf{1.F,127/255.f,80/255.f}, 1.0f});
-	scene.lights.push_back(Light{Vec3f{0.f, 4.f, 0.f}, Colorf{1.F, 1.F, 1.F}, 1.0f});
+	scene.lights.push_back(Light{Vecf32{0.f, 4.f, 0.f}, Colorf32{1.F,127/255.f,80/255.f}, 1.0f});
+	scene.lights.push_back(Light{Vecf32{0.f, 0.f, 0.f}, Colorf32{1.F, 1.f, 1.F}, 1.0f});
 
 	scene.Draw(renderSurface);
 

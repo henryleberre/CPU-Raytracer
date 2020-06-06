@@ -1,0 +1,7 @@
+screenshots/
+*.ppm
+*.obj
+*.out
+*.exe
+.vscode/
+*.lnk

@@ -1,0 +1,3 @@
+[submodule "Weiss-Math"]
+	path = Weiss-Math
+	url = https://github.com/PolarToCartesian/Weiss-Math
